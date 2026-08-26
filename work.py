@@ -361,24 +361,15 @@ def main() -> None:
     )
 
     application = Application.builder().token(BOT_TOKEN).request(request).build()
-
-    application.add_handler(CommandHandler("top", cmd_top))
+application.add_handler(CommandHandler("top", cmd_top))
     application.add_handler(CommandHandler("card", cmd_card))
     application.add_handler(CommandHandler("manual", cmd_manual))
     application.add_handler(CommandHandler("admin", cmd_admin))
-
-    application.add_handler(
-        CallbackQueryHandler(admin_callback, pattern=r"^(admin_|remove_|reset_).*")
-    )
-    application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, admin_text_input)
-    )
-    application.add_handler(
-        MessageHandler(filters.Regex(r"(?i)^/?мануал$"), cmd_manual)
-    )
+    application.add_handler(CallbackQueryHandler(admin_callback, pattern=r"^(admin_|remove_|reset_).*"))
+    application.add_handler(MessageHandler(filters.Regex(r"(?i)^/?мануал$"), cmd_manual))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_text_input))
 
     job_queue = application.job_queue
-    if job_queue is not None:
         job_queue.run_repeating(
             refresh_top_cache,
             interval=UPDATE_INTERVAL_SECONDS,
