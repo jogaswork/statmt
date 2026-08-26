@@ -374,7 +374,7 @@ def main() -> None:
         MessageHandler(filters.TEXT & ~filters.COMMAND, admin_text_input)
     )
     application.add_handler(
-        MessageHandler(filters.Regex(r"^(?i)/?мануал$"), cmd_manual)
+        MessageHandler(filters.Regex(r"(?i)^/?мануал$"), cmd_manual)
     )
 
     job_queue = application.job_queue
