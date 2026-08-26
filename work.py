@@ -1,5 +1,6 @@
 import json
 import logging
+
 from telegram.request import HTTPXRequest
 from pathlib import Path
 
@@ -27,13 +28,12 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Конфигурация
 # ---------------------------------------------------------------------------
-
 BOT_TOKEN = "8830622827:AAGr--WXYjGQ0Y-bcfvMYrljFR2ZCPd_N6Y"
-
 ADMIN_IDS = {8567015903, 8422968319}
 
 DATA_FILE = Path("top_data.json")
 CARD_FILE = Path("card_data.json")
+
 UPDATE_INTERVAL_SECONDS = 3600  # 1 раз в час
 
 # Placeholder-символ, поверх которого Telegram отрисует премиум-эмодзи.
@@ -43,7 +43,6 @@ PLACEHOLDER = "⭐"
 
 AMOUNT_EMOJI_ID = "5350726727586840774"
 TITLE_EMOJI_ID = "5429194899616474448"
-
 RANK_EMOJI_IDS = {
     1: "5440539497383087970",
     2: "5447203607294265305",
@@ -52,11 +51,13 @@ RANK_EMOJI_IDS = {
 RANK_EMOJI_DEFAULT_ID = "5444986266003194641"  # места с 4-го и далее
 CARD_EMOJI_ID = "5472135042044011718"
 
+# Мануал
+MANUAL_EMOJI_ID = "5379573591962563018"
+MANUAL_LINK = "https://t.me/+jGW2DBHkqAwwYzgx"
 
 # ---------------------------------------------------------------------------
 # Работа с данными
 # ---------------------------------------------------------------------------
-
 def load_data() -> dict:
     if DATA_FILE.exists():
         with open(DATA_FILE, "r", encoding="utf-8") as f:
@@ -109,7 +110,6 @@ def _append_custom_emoji(text: str, entities: list[MessageEntity], emoji_id: str
 
 def build_top_message(data: dict) -> tuple[str, list[MessageEntity]]:
     entities: list[MessageEntity] = []
-
     text = _append_custom_emoji("", entities, TITLE_EMOJI_ID)
     text += " ТОП ВОРКЕРОВ\n\n"
 
@@ -117,7 +117,6 @@ def build_top_message(data: dict) -> tuple[str, list[MessageEntity]]:
         text += "Топ пока пуст."
     else:
         sorted_items = sorted(data.items(), key=lambda kv: kv[1], reverse=True)
-
         for i, (username, amount) in enumerate(sorted_items, start=1):
             rank_emoji_id = RANK_EMOJI_IDS.get(i, RANK_EMOJI_DEFAULT_ID)
             text = _append_custom_emoji(text, entities, rank_emoji_id)
@@ -131,20 +130,29 @@ def build_top_message(data: dict) -> tuple[str, list[MessageEntity]]:
 
 def build_card_message() -> tuple[str, list[MessageEntity]]:
     entities: list[MessageEntity] = []
-
     text = _append_custom_emoji("", entities, CARD_EMOJI_ID)
     text += " Реквизиты для оплаты:\n\n"
 
     card_text = load_card()
     text += card_text if card_text else "Реквизиты пока не установлены."
-
     return text, entities
+
+
+def build_manual_message() -> tuple[str, list[MessageEntity]]:
+    entities: list[MessageEntity] = []
+    text = _append_custom_emoji("", entities, MANUAL_EMOJI_ID)
+    text += " Мануал"
+    return text, entities
+
+
+def manual_keyboard() -> InlineKeyboardMarkup:
+    keyboard = [[InlineKeyboardButton("Читать", url=MANUAL_LINK)]]
+    return InlineKeyboardMarkup(keyboard)
 
 
 # ---------------------------------------------------------------------------
 # /top
 # ---------------------------------------------------------------------------
-
 async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     data = load_data()
     text, entities = build_top_message(data)
@@ -156,10 +164,16 @@ async def cmd_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(text, entities=entities)
 
 
+async def cmd_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text, entities = build_manual_message()
+    await update.message.reply_text(
+        text, entities=entities, reply_markup=manual_keyboard()
+    )
+
+
 # ---------------------------------------------------------------------------
 # /admin — inline-панель администрирования
 # ---------------------------------------------------------------------------
-
 def admin_main_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton("➕ Добавить в топ", callback_data="admin_add")],
@@ -175,6 +189,7 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
         return
+
     context.user_data.pop("awaiting", None)
     await update.message.reply_text("⚙️ Админ-панель", reply_markup=admin_main_keyboard())
 
@@ -205,6 +220,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 "Топ пуст, удалять нечего.", reply_markup=admin_main_keyboard()
             )
             return
+
         keyboard = [
             [InlineKeyboardButton(f"🗑 {username}", callback_data=f"remove_{username}")]
             for username in top_data
@@ -296,7 +312,6 @@ async def admin_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     text = update.message.text.strip()
     parts = text.split()
-
     if len(parts) != 2:
         await update.message.reply_text(
             "Неверный формат. Пример:\n@username 50000"
@@ -305,7 +320,6 @@ async def admin_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     username, amount_raw = parts
     amount_raw = amount_raw.replace(" ", "")
-
     if not amount_raw.lstrip("-").isdigit():
         await update.message.reply_text(
             "Сумма должна быть числом. Пример:\n@username 50000"
@@ -329,7 +343,6 @@ async def admin_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 # ---------------------------------------------------------------------------
 # Периодическое "перепроведение" кэша топа
 # ---------------------------------------------------------------------------
-
 async def refresh_top_cache(context: ContextTypes.DEFAULT_TYPE) -> None:
     data = load_data()
     logger.info("Автообновление топа выполнено. Записей: %d", len(data))
@@ -338,13 +351,22 @@ async def refresh_top_cache(context: ContextTypes.DEFAULT_TYPE) -> None:
 # ---------------------------------------------------------------------------
 # Запуск бота
 # ---------------------------------------------------------------------------
-
 def main() -> None:
-    application = Application.builder().token(BOT_TOKEN).build()
+    # Таймауты для проксі (например PythonAnywhere)
+    request = HTTPXRequest(
+        connect_timeout=10.0,
+        read_timeout=10.0,
+        write_timeout=10.0,
+        pool_timeout=10.0,
+    )
+
+    application = Application.builder().token(BOT_TOKEN).request(request).build()
 
     application.add_handler(CommandHandler("top", cmd_top))
     application.add_handler(CommandHandler("card", cmd_card))
+    application.add_handler(CommandHandler("мануал", cmd_manual))
     application.add_handler(CommandHandler("admin", cmd_admin))
+
     application.add_handler(
         CallbackQueryHandler(admin_callback, pattern=r"^(admin_|remove_|reset_).*")
     )
@@ -371,19 +393,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-    # 1. Налаштовуємо таймаути для проксі PythonAnywhere
-request = HTTPXRequest(
-    connect_timeout=10.0,
-    read_timeout=10.0,
-    write_timeout=10.0,
-    pool_timeout=10.0
-)
-
-# 2. Передаємо request при створенні Application
-app = (
-    Application.builder()
-    .token("ВАШ_ТОКЕН_БОТА")
-    .request(request)
-    .build()
-)
