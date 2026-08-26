@@ -1,6 +1,6 @@
 import json
 import logging
-
+from telegram.ext import MessageHandler, filters
 from telegram.request import HTTPXRequest
 from pathlib import Path
 
@@ -364,7 +364,7 @@ def main() -> None:
 
     application.add_handler(CommandHandler("top", cmd_top))
     application.add_handler(CommandHandler("card", cmd_card))
-    application.add_handler(CommandHandler("мануал", cmd_manual))
+    application.add_handler(CommandHandler("manual", cmd_manual))
     application.add_handler(CommandHandler("admin", cmd_admin))
 
     application.add_handler(
@@ -372,6 +372,9 @@ def main() -> None:
     )
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, admin_text_input)
+    )
+    application.add_handler(
+        MessageHandler(filters.Regex(r"^(?i)/?мануал$"), cmd_manual)
     )
 
     job_queue = application.job_queue
