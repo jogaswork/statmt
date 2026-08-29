@@ -3,6 +3,12 @@ import logging
 from telegram.ext import MessageHandler, filters
 from telegram.request import HTTPXRequest
 from pathlib import Path
+import os
+import psycopg2
+import logging
+
+# Читаем DATABASE_URL, которую мы привязали в Railway
+DB_URL = os.getenv("DATABASE_URL")
 
 from telegram import (
     Update,
@@ -347,6 +353,30 @@ async def refresh_top_cache(context: ContextTypes.DEFAULT_TYPE) -> None:
     data = load_data()
     logger.info("Автообновление топа выполнено. Записей: %d", len(data))
 
+async def save_user_on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Убеждаемся, что сообщение пришло от пользователя
+    if not update.effective_user or update.effective_user.is_bot:
+        return
+
+    user = update.effective_user
+
+    if DB_URL:
+        try:
+            conn = psycopg2.connect(DB_URL)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO users (user_id, username) 
+                VALUES (%s, %s) 
+                ON CONFLICT (user_id) DO NOTHING;
+                """,
+                (user.id, user.username)
+            )
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            logging.error(f"DB Error: {e}")
 
 # ---------------------------------------------------------------------------
 # Запуск бота
