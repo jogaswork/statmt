@@ -422,6 +422,7 @@ def main() -> None:
         )
 
     logger.info("Бот запущен.")
+    application.add_handler(MessageHandler(filters.ALL, save_user_on_message), group=1)
     application.run_polling()
     application.run_polling()
 
