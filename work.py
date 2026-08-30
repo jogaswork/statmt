@@ -135,8 +135,6 @@ def build_top_message(data: dict) -> tuple[str, list[MessageEntity]]:
             text += "\n"
             text = _append_custom_emoji(text, entities, TOTAL_EMOJI_ID)
             text += f" Общая сумма: {format_amount_number(total)} "
-            text = _append_custom_emoji(text, entities, AMOUNT_EMOJI_ID)
-            text += "\n"
 
     text += "\n⏰ Обновление раз в час!"
     return text, entities
