@@ -38,7 +38,7 @@ BOT_TOKEN = "8830622827:AAGr--WXYjGQ0Y-bcfvMYrljFR2ZCPd_N6Y"
 ADMIN_IDS = {8567015903, 8422968319}
 
 DATA_FILE = Path("top_data.json")
-CARD_FILE = Path("card_data.json")
+CARD_FILE = Path("/data/card_data.json")
 
 UPDATE_INTERVAL_SECONDS = 3600  # 1 раз в час
 
