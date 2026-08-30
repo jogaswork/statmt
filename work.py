@@ -56,6 +56,7 @@ RANK_EMOJI_IDS = {
 }
 RANK_EMOJI_DEFAULT_ID = "5444986266003194641"  # места с 4-го и далее
 CARD_EMOJI_ID = "5472135042044011718"
+TOTAL_EMOJI_ID = "5870921681735781843"
 
 # Мануал
 MANUAL_EMOJI_ID = "5379573591962563018"
@@ -127,6 +128,13 @@ def build_top_message(data: dict) -> tuple[str, list[MessageEntity]]:
             rank_emoji_id = RANK_EMOJI_IDS.get(i, RANK_EMOJI_DEFAULT_ID)
             text = _append_custom_emoji(text, entities, rank_emoji_id)
             text += f" {username} — {format_amount_number(amount)} "
+            text = _append_custom_emoji(text, entities, AMOUNT_EMOJI_ID)
+            text += "\n"
+
+            total = sum(data.values())
+            text += "\n"
+            text = _append_custom_emoji(text, entities, TOTAL_EMOJI_ID)
+            text += f" Общая сумма: {format_amount_number(total)} "
             text = _append_custom_emoji(text, entities, AMOUNT_EMOJI_ID)
             text += "\n"
 
