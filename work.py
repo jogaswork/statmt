@@ -410,6 +410,9 @@ def main() -> None:
 
     application.add_handler(CommandHandler("top", cmd_top))
     application.add_handler(CommandHandler("card", cmd_card))
+    application.add_handler(CallbackQueryHandler(admin_callback, pattern=r"^(admin_|remove_|reset_).*"))
+    application.add_handler(MessageHandler(filters.Regex(r"(?i)^/?(топ|top)$"), cmd_top))
+    application.add_handler(MessageHandler(filters.Regex(r"(?i)^/?(реквизиты( карты)?|карты|карта|рекв(ы|и)?)$"), cmd_card))
     application.add_handler(CommandHandler("manual", cmd_manual))
     application.add_handler(CommandHandler("admin", cmd_admin))
     application.add_handler(CallbackQueryHandler(admin_callback, pattern=r"^(admin_|remove_|reset_).*"))
