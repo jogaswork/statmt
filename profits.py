@@ -1,5 +1,5 @@
 """MTR STATS profit management."""
-import html, json, os
+import html, json, os, re
 from pathlib import Path
 from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as K
 from telegram.ext import CommandHandler, CallbackQueryHandler, MessageHandler, filters
@@ -29,7 +29,8 @@ def render(template,values):
     text=template["body"]
     for key in ("service","worker","tp","curator","amount","share"):
         text=text.replace("{"+key+"}",html.escape(str(values.get(key,"—"))))
-    if len(text)>4000:raise ValueError("Слишком длинный текст профита")
+    limit=1024 if values.get("_photo") or template.get("photo") else 4096
+    if len(re.sub(r"<[^>]*>", "", text))>limit:raise ValueError(f"Текст слишком длинный для публикации с фото (лимит {limit})")
     return text
 async def start(update,context):
     if update.effective_user.id not in context.bot_data["profit_admins"]:return
@@ -43,9 +44,8 @@ async def next_field(message,context):
         for field in ("tp","curator"):
             if field not in p["fields"]:p["values"][field]="—"
     if p["step"]>=len(p["fields"]):
-        p["mode"]="confirm"
-        try:await message.reply_text("👀 Предпросмотр:\n\n"+render(d["templates"][p["template"]],p["values"]),parse_mode="HTML",reply_markup=keyboard([("✅ Опубликовать и начислить","pf_publish"),("❌ Отмена","pf_cancel")]))
-        except Exception as exc:await message.reply_text(f"Ошибка оформления: {exc}")
+        p["mode"]="photo_choice"
+        await message.reply_text("🖼 Добавить фото к этому профиту? Можно отправить фото сейчас или использовать фото из шаблона.",reply_markup=keyboard([("📷 Фото из шаблона / без фото","pf_preview"),("❌ Отмена","pf_cancel")]))
         return
     field=p["fields"][p["step"]]
     if field in ("amount","share"):
@@ -96,11 +96,15 @@ async def callback(update,context):
         index=int(action[len("pf_template_"):])
         if index>=len(d["templates"]):return
         state(context,mode="template_edit",index=index)
-        await q.edit_message_text(d["templates"][index]["name"],reply_markup=keyboard([("✏️ Изменить оформление","pf_tbody"),("🗑 Удалить шаблон","pf_tdelete"),("⬅️ Назад","pf_templates")]))
+        await q.edit_message_text(d["templates"][index]["name"],reply_markup=keyboard([("✏️ Изменить оформление","pf_tbody"),("🖼 Установить фото шаблона","pf_tphoto"),("🗑 Удалить шаблон","pf_tdelete"),("⬅️ Назад","pf_templates")]))
     elif action=="pf_tbody":
         if p.get("mode")!="template_edit":return
         p["mode"]="template_edit_body"
         await q.edit_message_text("Пришлите новый текст анкеты с премиум-эмодзи. Переменные: {worker}, {tp}, {curator}, {amount}, {share}, {service}.")
+    elif action=="pf_tphoto":
+        if p.get("mode")!="template_edit":return
+        p["mode"]="template_photo"
+        await q.edit_message_text("📷 Пришлите фото. Оно будет использоваться по умолчанию во всех профитах этого шаблона. Для удаления отправьте слово УДАЛИТЬ.")
     elif action=="pf_tdelete":
         if p.get("mode")!="template_edit":return
         index=p["index"]
@@ -132,13 +136,21 @@ async def callback(update,context):
         if field not in ("tp","curator"):return
         p["values"][field]="—";p["step"]+=1
         await next_field(q.message,context)
+    elif action=="pf_preview":
+        if p.get("mode")!="photo_choice":return
+        await preview(q.message,context)
     elif action=="pf_cancel":
         clear(context);await q.edit_message_text("Отменено.",reply_markup=menu())
     elif action=="pf_publish":
         if p.get("mode")!="confirm":return
         try:
             template=d["templates"][p["template"]];channel=d["channels"][p["channel"]]
-            sent=await context.bot.send_message(channel["id"],render(template,p["values"]),parse_mode="HTML")
+            body=render(template,p["values"])
+            photo=p["values"].get("_photo") or template.get("photo")
+            if photo:
+                sent=await context.bot.send_photo(channel["id"],photo=photo,caption=body,parse_mode="HTML")
+            else:
+                sent=await context.bot.send_message(channel["id"],body,parse_mode="HTML")
         except Exception as exc:
             await q.message.reply_text(f"❌ Не удалось опубликовать: {exc}");return
         p["mode"]="sent"
@@ -190,11 +202,24 @@ async def input_message(update,context):
         p["tp"]=values[0]=="да";p["curator"]=values[1]=="да";p["mode"]="template_body"
         await message.reply_text("Пришлите текст анкеты с премиум-эмодзи. Переменные: {worker}, {tp}, {curator}, {amount}, {share}, {service}. Или отправьте «по умолчанию».")
     elif mode in ("template_body","template_edit_body"):
-        body=DEFAULT if text.lower()=="по умолчанию" else message.text_html
+        body=DEFAULT if text.lower()=="по умолчанию" else (message.caption_html if message.photo else message.text_html)
         if not body:await message.reply_text("Отправьте текст.");return
-        if mode=="template_body":d["templates"].append({"name":p["name"],"tp":p["tp"],"curator":p["curator"],"body":body})
-        else:d["templates"][p["index"]]["body"]=body
+        if mode=="template_body":d["templates"].append({"name":p["name"],"tp":p["tp"],"curator":p["curator"],"body":body,"photo":message.photo[-1].file_id if message.photo else None})
+        else:
+            d["templates"][p["index"]]["body"]=body
+            if message.photo:d["templates"][p["index"]]["photo"]=message.photo[-1].file_id
         save(d);clear(context);await message.reply_text("✅ Шаблон сохранён.",reply_markup=menu())
+    elif mode=="template_photo":
+        if p["index"]>=len(d["templates"]):return
+        if message.photo:d["templates"][p["index"]]["photo"]=message.photo[-1].file_id
+        elif text.upper()=="УДАЛИТЬ":d["templates"][p["index"]]["photo"]=None
+        else:await message.reply_text("Пришлите фото или слово УДАЛИТЬ.");return
+        save(d);clear(context);await message.reply_text("✅ Фото шаблона обновлено.",reply_markup=menu())
+    elif mode=="photo_choice":
+        if not message.photo:
+            await message.reply_text("Пришлите фото или нажмите кнопку «Фото из шаблона / без фото».");return
+        p["values"]["_photo"]=message.photo[-1].file_id
+        await preview(message,context)
     elif mode=="number":
         if not text.isdigit() or int(text)<=0:
             await message.reply_text("Введите положительное целое число.");return
@@ -203,8 +228,19 @@ async def input_message(update,context):
             await message.reply_text("Доля воркера не может превышать сумму.");return
         p["values"][field]=value;p["step"]+=1
         await next_field(message,context)
+async def preview(message,context):
+    p=context.user_data["profit_flow"];t=get()["templates"][p["template"]]
+    try:
+        body=render(t,p["values"])
+        photo=p["values"].get("_photo") or t.get("photo")
+        actions=keyboard([("✅ Опубликовать и начислить","pf_publish"),("❌ Отмена","pf_cancel")])
+        if photo:await message.reply_photo(photo,caption=body,parse_mode="HTML",reply_markup=actions)
+        else:await message.reply_text(body,parse_mode="HTML",reply_markup=actions)
+        p["mode"]="confirm"
+    except Exception as exc:await message.reply_text(f"Ошибка оформления: {exc}")
+
 def register(app,admin_ids):
     app.bot_data["profit_admins"]=admin_ids
     app.add_handler(CommandHandler("profits",start))
     app.add_handler(CallbackQueryHandler(callback,pattern=r"^pf_"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,input_message),group=-1)
+    app.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND,input_message),group=-1)
