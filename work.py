@@ -65,17 +65,77 @@ MANUAL_LINK = "https://t.me/+jGW2DBHkqAwwYzgx"
 # ---------------------------------------------------------------------------
 # Работа с данными
 # ---------------------------------------------------------------------------
+def _read_top_file(path: Path) -> dict:
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            value = json.load(f)
+        if isinstance(value, dict):
+            return {str(k): int(v) for k, v in value.items()}
+    except (OSError, ValueError, TypeError):
+        logger.exception("Unable to read top file: %s", path)
+    return {}
+
+
 def load_data() -> dict:
+    # Never overwrite existing volume data during migration.
     if DATA_FILE.exists():
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+        return _read_top_file(DATA_FILE)
+    legacy = Path("top_data.json")
+    if legacy != DATA_FILE and legacy.exists():
+        return _read_top_file(legacy)
     return {}
 
 
 def save_data(data: dict) -> None:
     DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    # Keep a backup of existing data before any change.
+    if DATA_FILE.exists():
+        import shutil
+        shutil.copy2(DATA_FILE, DATA_FILE.with_suffix(".json.bak"))
+    import tempfile
+    fd, temp = tempfile.mkstemp(prefix="top-", suffix=".tmp", dir=str(DATA_FILE.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(temp, DATA_FILE)
+    finally:
+        if os.path.exists(temp):
+            os.unlink(temp)
+
+
+async def cmd_top_recovery(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    candidates = [DATA_FILE, Path("top_data.json"), Path("/data/top_data.json.bak")]
+    seen = set()
+    lines = ["🔎 Проверка файлов топа:"]
+    for path in candidates:
+        if str(path) in seen:
+            continue
+        seen.add(str(path))
+        exists = path.exists()
+        values = _read_top_file(path) if exists else {}
+        lines.append(f"{path}: {'есть' if exists else 'нет'}, записей: {len(values)}, сумма: {sum(values.values()):,}")
+    lines.append("Никакие данные не изменены.")
+    await update.message.reply_text("\n".join(lines))
+
+
+async def cmd_top_restore(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    # Restore only into an empty destination, never overwrite current standings.
+    if load_data():
+        await update.message.reply_text("⚠️ Текущий топ не пустой. Автоматическое восстановление заблокировано.")
+        return
+    for source in (Path("top_data.json"), Path("/data/top_data.json.bak")):
+        if source == DATA_FILE:
+            continue
+        values = _read_top_file(source) if source.exists() else {}
+        if values:
+            save_data(values)
+            await update.message.reply_text(f"✅ Восстановлено {len(values)} записей. Общая сумма: {sum(values.values()):,}")
+            return
+    await update.message.reply_text("❌ Старый файл или резервная копия не найдены в доступных путях. Ничего не перезаписано.")
 
 
 def load_card() -> str:
@@ -419,6 +479,8 @@ def main() -> None:
 
     from profits import register as register_profits
     register_profits(application, ADMIN_IDS)
+    application.add_handler(CommandHandler("top_recovery", cmd_top_recovery))
+    application.add_handler(CommandHandler("top_restore", cmd_top_restore))
     application.add_handler(CommandHandler("top", cmd_top))
     application.add_handler(CommandHandler("card", cmd_card))
     application.add_handler(CallbackQueryHandler(admin_callback, pattern=r"^(admin_|remove_|reset_).*"))
