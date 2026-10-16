@@ -34,11 +34,11 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Конфигурация
 # ---------------------------------------------------------------------------
-BOT_TOKEN = "8830622827:AAGr--WXYjGQ0Y-bcfvMYrljFR2ZCPd_N6Y"
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 ADMIN_IDS = {8567015903, 8422968319}
 
-DATA_FILE = Path("top_data.json")
-CARD_FILE = Path("/data/card_data.json")
+DATA_FILE = Path("/data/top_data.json") if Path("/data").is_dir() else Path("top_data.json")
+CARD_FILE = Path("/data/card_data.json") if Path("/data").is_dir() else Path("card_data.json")
 
 UPDATE_INTERVAL_SECONDS = 3600  # 1 раз в час
 
@@ -73,6 +73,7 @@ def load_data() -> dict:
 
 
 def save_data(data: dict) -> None:
+    DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
@@ -85,6 +86,7 @@ def load_card() -> str:
 
 
 def save_card(text: str) -> None:
+    CARD_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(CARD_FILE, "w", encoding="utf-8") as f:
         json.dump({"text": text}, f, ensure_ascii=False, indent=2)
 
@@ -195,6 +197,7 @@ def admin_main_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("♻️ Сбросить топ", callback_data="admin_reset")],
         [InlineKeyboardButton("📊 Показать топ", callback_data="admin_show")],
         [InlineKeyboardButton("💳 Изменить реквизиты", callback_data="admin_card")],
+        [InlineKeyboardButton("🚀 Управление профитами", callback_data="admin_profits")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -218,6 +221,12 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     await query.answer()
     data = query.data
+
+    if data == "admin_profits":
+        context.user_data.pop("awaiting", None)
+        from profits import menu
+        await query.edit_message_text("📊 MTR STATS · Профиты", reply_markup=menu())
+        return
 
     if data == "admin_add":
         context.user_data["awaiting"] = "add"
@@ -408,6 +417,8 @@ def main() -> None:
     )
     application = Application.builder().token(BOT_TOKEN).request(request).build()
 
+    from profits import register as register_profits
+    register_profits(application, ADMIN_IDS)
     application.add_handler(CommandHandler("top", cmd_top))
     application.add_handler(CommandHandler("card", cmd_card))
     application.add_handler(CallbackQueryHandler(admin_callback, pattern=r"^(admin_|remove_|reset_).*"))
@@ -434,7 +445,6 @@ def main() -> None:
 
     logger.info("Бот запущен.")
     application.add_handler(MessageHandler(filters.ALL, save_user_on_message), group=1)
-    application.run_polling()
     application.run_polling()
 
 
