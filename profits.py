@@ -32,6 +32,39 @@ def render(template,values):
     limit=1024 if values.get("_photo") or template.get("photo") else 4096
     if len(re.sub(r"<[^>]*>", "", text))>limit:raise ValueError(f"Текст слишком длинный для публикации с фото (лимит {limit})")
     return text
+
+def formatted_html(message):
+    """Serialize Telegram entities, including custom premium emoji, to Bot API HTML."""
+    raw = message.caption if message.caption is not None else (message.text or "")
+    entities = message.caption_entities if message.caption is not None else message.entities
+    encoded = raw.encode("utf-16-le")
+    def chunk(a, b):
+        return encoded[a*2:b*2].decode("utf-16-le")
+    total = len(encoded)//2
+    boundaries = {0,total}
+    usable=[]
+    for e in entities or []:
+        if e.offset < 0 or e.offset+e.length > total: continue
+        usable.append(e)
+        boundaries.update((e.offset,e.offset+e.length))
+    points=sorted(boundaries)
+    output=[]
+    for a,b in zip(points,points[1:]):
+        fragment=html.escape(chunk(a,b))
+        active=[e for e in usable if e.offset<=a and e.offset+e.length>=b]
+        active.sort(key=lambda e:(e.offset,-e.length))
+        for e in reversed(active):
+            kind=str(e.type)
+            if kind=="custom_emoji":
+                fragment=f'<tg-emoji emoji-id="{e.custom_emoji_id}">{fragment}</tg-emoji>'
+            elif kind in ("bold","italic","underline","strikethrough","spoiler","code","pre"):
+                tag={"bold":"b","italic":"i","underline":"u","strikethrough":"s","spoiler":"tg-spoiler","code":"code","pre":"pre"}[kind]
+                fragment=f"<{tag}>{fragment}</{tag}>"
+            elif kind=="text_link" and e.url:
+                fragment=f'<a href="{html.escape(e.url,quote=True)}">{fragment}</a>'
+        output.append(fragment)
+    return "".join(output)
+
 async def start(update,context):
     if update.effective_user.id not in context.bot_data["profit_admins"]:return
     clear(context)
@@ -140,7 +173,11 @@ async def callback(update,context):
         if p.get("mode")!="photo_choice":return
         await preview(q.message,context)
     elif action=="pf_cancel":
-        clear(context);await q.edit_message_text("Отменено.",reply_markup=menu())
+        clear(context)
+        if q.message.photo:
+            await q.edit_message_reply_markup(reply_markup=None)
+            await q.message.reply_text("Отменено.",reply_markup=menu())
+        else:await q.edit_message_text("Отменено.",reply_markup=menu())
     elif action=="pf_publish":
         if p.get("mode")!="confirm":return
         try:
@@ -161,9 +198,10 @@ async def callback(update,context):
             save_data(top)
             d=get();d["history"].append({"channel":channel["id"],"message":sent.message_id,"values":p["values"]});save(d)
             clear(context)
-            await q.edit_message_text(f"✅ Опубликовано! {worker}: {top[worker]:,} ₽",reply_markup=menu())
+            await q.edit_message_reply_markup(reply_markup=None)
+            await q.message.reply_text(f"✅ Опубликовано! {worker}: {top[worker]:,} ₽",reply_markup=menu())
         except Exception as exc:
-            await q.message.reply_text(f"⚠️ Пост опубликован, но возникла ошибка начисления: {exc}. Не отправляйте его повторно.")
+            await q.message.reply_text(f"⚠️ Пост опубликован, но возникла ошибка сохранения: {exc}. Не отправляйте его повторно.")
 async def input_message(update,context):
     if update.effective_user.id not in context.bot_data["profit_admins"]:return
     p=context.user_data.get("profit_flow")
@@ -202,7 +240,7 @@ async def input_message(update,context):
         p["tp"]=values[0]=="да";p["curator"]=values[1]=="да";p["mode"]="template_body"
         await message.reply_text("Пришлите текст анкеты с премиум-эмодзи. Переменные: {worker}, {tp}, {curator}, {amount}, {share}, {service}. Или отправьте «по умолчанию».")
     elif mode in ("template_body","template_edit_body"):
-        body=DEFAULT if text.lower()=="по умолчанию" else (message.caption_html if message.photo else message.text_html)
+        body=DEFAULT if text.lower()=="по умолчанию" else formatted_html(message)
         if not body:await message.reply_text("Отправьте текст.");return
         if mode=="template_body":d["templates"].append({"name":p["name"],"tp":p["tp"],"curator":p["curator"],"body":body,"photo":message.photo[-1].file_id if message.photo else None})
         else:
