@@ -42,6 +42,23 @@ CARD_FILE = Path("/data/card_data.json") if Path("/data").is_dir() else Path("ca
 
 UPDATE_INTERVAL_SECONDS = 3600  # 1 раз в час
 
+# Historical standings recovered from the user's screenshot (total: 417,799).
+# Keep internal @ keys for profit accounting; display # in /top.
+RECOVERY_SNAPSHOT = {
+    "@manzi_nx": 333476,
+    "@hristi14": 30485,
+    "@mr_what_work": 20250,
+    "@Шин": 9900,
+    "@Flipa222": 7035,
+    "@woonsm": 6650,
+    "@milanochkaaaaaaas": 5500,
+    "@europawin": 2500,
+    "@jogas_wor": 1488,
+    "@josefphg": 515,
+}
+RESTORE_MARKER = DATA_FILE.parent / ".snapshot_417799_restored"
+
+
 # Placeholder-символ, поверх которого Telegram отрисует премиум-эмодзи.
 # Виден клиентам любых пользователей, отправлять премиум-эмодзи может
 # только сам бот (это не требует Premium у получателя).
@@ -101,6 +118,35 @@ def save_data(data: dict) -> None:
     finally:
         if os.path.exists(temp):
             os.unlink(temp)
+
+
+def restore_historical_snapshot_once() -> None:
+    """Merge older screenshot standings, preserve new amounts, and never add twice."""
+    if RESTORE_MARKER.exists():
+        return
+    assert sum(RECOVERY_SNAPSHOT.values()) == 417799
+    existing = load_data()
+    # Do not replace a populated modern top that already exceeds the historic snapshot.
+    if sum(existing.values()) >= 417799:
+        logger.info("Historical restore skipped: current total already >= 417799.")
+        return
+    merged = dict(existing)
+    added = 0
+    updated = 0
+    for name, old_amount in RECOVERY_SNAPSHOT.items():
+        # Matching ignores @ vs # and case to prevent duplicate workers.
+        matching = next((key for key in merged if key.lstrip("@#").casefold() == name.lstrip("@#").casefold()), None)
+        if matching is None:
+            merged[name] = old_amount
+            added += 1
+        elif merged[matching] < old_amount:
+            merged[matching] = old_amount
+            updated += 1
+    if merged != existing:
+        save_data(merged)
+    RESTORE_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    RESTORE_MARKER.write_text("Restored snapshot from user screenshot; original existing sums preserved.\n", encoding="utf-8")
+    logger.warning("Historical snapshot restored: %d added, %d raised, new total %d.", added, updated, sum(merged.values()))
 
 
 async def cmd_top_recovery(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -189,7 +235,7 @@ def build_top_message(data: dict) -> tuple[str, list[MessageEntity]]:
         for i, (username, amount) in enumerate(sorted_items, start=1):
             rank_emoji_id = RANK_EMOJI_IDS.get(i, RANK_EMOJI_DEFAULT_ID)
             text = _append_custom_emoji(text, entities, rank_emoji_id)
-            text += f" {username} — {format_amount_number(amount)} "
+            text += f" #{username.lstrip('@#')} — {format_amount_number(amount)} "
             text = _append_custom_emoji(text, entities, AMOUNT_EMOJI_ID)
             text += "\n"
 
@@ -475,6 +521,7 @@ def main() -> None:
         write_timeout=10.0,
         pool_timeout=10.0,
     )
+    restore_historical_snapshot_once()
     application = Application.builder().token(BOT_TOKEN).request(request).build()
 
     from profits import register as register_profits
