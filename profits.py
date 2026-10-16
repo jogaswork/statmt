@@ -182,12 +182,16 @@ async def callback(update,context):
         if p.get("mode")!="confirm":return
         try:
             template=d["templates"][p["template"]];channel=d["channels"][p["channel"]]
-            body=render(template,p["values"])
-            photo=p["values"].get("_photo") or template.get("photo")
-            if photo:
-                sent=await context.bot.send_photo(channel["id"],photo=photo,caption=body,parse_mode="HTML")
-            else:
-                sent=await context.bot.send_message(channel["id"],body,parse_mode="HTML")
+            # Copy the exact preview, preserving its photo, formatting and custom emoji entities.
+            # The inline confirmation keyboard is not copied by Telegram.
+            if q.message.message_id != p.get("preview_id") or q.message.chat_id != p.get("preview_chat"):
+                await q.message.reply_text("Предпросмотр устарел. Создайте профит заново.")
+                return
+            sent=await context.bot.copy_message(
+                chat_id=channel["id"],
+                from_chat_id=p["preview_chat"],
+                message_id=p["preview_id"],
+            )
         except Exception as exc:
             await q.message.reply_text(f"❌ Не удалось опубликовать: {exc}");return
         p["mode"]="sent"
@@ -272,8 +276,10 @@ async def preview(message,context):
         body=render(t,p["values"])
         photo=p["values"].get("_photo") or t.get("photo")
         actions=keyboard([("✅ Опубликовать и начислить","pf_publish"),("❌ Отмена","pf_cancel")])
-        if photo:await message.reply_photo(photo,caption=body,parse_mode="HTML",reply_markup=actions)
-        else:await message.reply_text(body,parse_mode="HTML",reply_markup=actions)
+        if photo:sent=await message.reply_photo(photo,caption=body,parse_mode="HTML",reply_markup=actions)
+        else:sent=await message.reply_text(body,parse_mode="HTML",reply_markup=actions)
+        p["preview_id"]=sent.message_id
+        p["preview_chat"]=sent.chat_id
         p["mode"]="confirm"
     except Exception as exc:await message.reply_text(f"Ошибка оформления: {exc}")
 
