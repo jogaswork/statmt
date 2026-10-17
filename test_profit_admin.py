@@ -57,6 +57,31 @@ class ProfitTests(unittest.IsolatedAsyncioTestCase):
             admin.persist_change(data, post)
             self.assertEqual(work.load_data(), before)
 
+    def test_single_status_button_has_matching_emoji(self):
+        for status, label in admin.STATUSES.items():
+            markup = admin.status_keyboard({"status": status})
+            self.assertEqual(len(markup.inline_keyboard), 1)
+            self.assertEqual(len(markup.inline_keyboard[0]), 1)
+            button = markup.inline_keyboard[0][0]
+            self.assertEqual(button.text, label)
+            self.assertEqual(button.callback_data, "pf_status_" + status)
+        self.assertEqual(admin.status_keyboard({}).inline_keyboard[0][0].text, "⏳ Ожидание")
+        self.assertEqual(admin.status_keyboard({"status": "unknown"}).inline_keyboard[0][0].text, "⏳ Ожидание")
+
+    async def test_startup_replaces_three_buttons_with_current_status(self):
+        data = profits.get()
+        data["history"][0].update(status="paid", buttons_version=1)
+        profits.save(data)
+        before = work.load_data()
+        await admin.sync_history(NS(bot=self.bot))
+        kwargs = self.bot.edit_message_reply_markup.await_args.kwargs
+        self.assertEqual(kwargs["reply_markup"].inline_keyboard[0][0].text, "✅ Выплачено")
+        self.assertEqual(sum(len(row) for row in kwargs["reply_markup"].inline_keyboard), 1)
+        self.assertEqual(profits.get()["history"][0]["buttons_version"], admin.BUTTONS_VERSION)
+        await admin.sync_history(NS(bot=self.bot))
+        self.bot.edit_message_reply_markup.assert_awaited_once()
+        self.assertEqual(work.load_data(), before)
+
     def test_crash_replay_is_idempotent(self):
         data = profits.get(); post = data["history"][0]
         new = dict(post["values"], share=150)

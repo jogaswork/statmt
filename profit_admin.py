@@ -5,7 +5,8 @@ import re
 from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as K
 from telegram.error import BadRequest
 
-STATUSES = {"lock": "Лок", "paid": "Выплачено", "waiting": "Ожидание"}
+STATUSES = {"lock": "🔒 Лок", "paid": "✅ Выплачено", "waiting": "⏳ Ожидание"}
+BUTTONS_VERSION = 2
 FIELDS = {"worker": "Воркер", "service": "Сервис", "tp": "ТП", "curator": "Куратор",
           "amount": "Сумма", "share": "Доля воркера"}
 PAGE_SIZE = 8
@@ -17,8 +18,9 @@ def identity(post):
 
 def status_keyboard(post):
     selected = post.get("status", "waiting")
-    return K([[B(("✅ " if selected == key else "") + label,
-                 callback_data="pf_status_" + key) for key, label in STATUSES.items()]])
+    if selected not in STATUSES:
+        selected = "waiting"
+    return K([[B(STATUSES[selected], callback_data="pf_status_" + selected)]])
 
 
 def find(data, key):
@@ -82,7 +84,7 @@ async def sync_saved(bot, key):
         # Do not return raw Telegram exceptions: request URLs can contain credentials.
         return "⚠️ Сохранено, но канал не обновлён. Проверьте пост и право редактирования, затем нажмите «Повторить обновление»."
     post["pending_sync"] = False
-    post["buttons_version"] = 1
+    post["buttons_version"] = BUTTONS_VERSION
     save(data)
     return "✅ Сохранено, пост обновлён."
 
@@ -92,7 +94,7 @@ async def sync_history(application):
     import asyncio
     from profits import get, save
     keys = [identity(post) for post in get()["history"]
-            if post.get("buttons_version") != 1 or post.get("pending_sync")]
+            if post.get("buttons_version") != BUTTONS_VERSION or post.get("pending_sync")]
     for key in keys:
         data = get(); post = find(data, key)
         try:
@@ -100,7 +102,7 @@ async def sync_history(application):
         except Exception:
             post["pending_sync"] = True
         else:
-            post["buttons_version"] = 1
+            post["buttons_version"] = BUTTONS_VERSION
             post["pending_sync"] = False
         save(data)
         await asyncio.sleep(0.1)
@@ -142,7 +144,7 @@ async def show_post(message, context, key, notice=""):
              f"{action}|{key}|{post.get('revision', 0)}") for label, action in rows]
     values = "\n".join(f"{label}: {post['values'].get(field, '—')}" for field, label in FIELDS.items())
     legacy = "\nДля старого поста перед правкой полей задайте текст с переменными. Можно переслать исходный пост, чтобы сохранить его оформление и фото." if not post.get("template") else ""
-    await message.reply_text(f"{notice}\nПрофит {key}\n{values}\nСтатус: {STATUSES.get(post.get('status'), 'Ожидание')}"
+    await message.reply_text(f"{notice}\nПрофит {key}\n{values}\nСтатус: {STATUSES.get(post.get('status'), STATUSES['waiting'])}"
                              + ("\n⚠️ Требуется обновление канала" if post.get("pending_sync") else "") + legacy,
                              reply_markup=keyboard(rows))
 

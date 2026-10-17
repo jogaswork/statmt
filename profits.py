@@ -217,12 +217,12 @@ async def callback(update,context):
         p["mode"]="sent"
         try:
             from work import load_data,commit_profit_data
-            from profit_admin import delta_top,worker_key
+            from profit_admin import delta_top,worker_key,BUTTONS_VERSION
             top=delta_top(load_data(),None,p["values"]);worker=worker_key(top,p["values"]["worker"])
             d=get();d["history"].append({"channel":channel["id"],"message":sent.message_id,
                 "values":dict(p["values"]),"template":template["body"],
                 "photo":p["values"].get("_photo") or template.get("photo"),
-                "status":"waiting","revision":0,"buttons_version":1});commit_profit_data(d,top)
+                "status":"waiting","revision":0,"buttons_version":BUTTONS_VERSION});commit_profit_data(d,top)
             clear(context)
             await q.edit_message_reply_markup(reply_markup=None)
             await q.message.reply_text(f"✅ Опубликовано! {worker}: {top[worker]:,} ₽",reply_markup=menu())
