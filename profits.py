@@ -8,9 +8,14 @@ PATH=Path("/data/profits.json") if Path("/data").is_dir() else Path("profits.jso
 LABEL={"service":"Сервисы","worker":"Воркеры","tp":"ТП","curator":"Кураторы"}
 DEFAULT="🦅 <b>НОВЫЙ ПРОФИТ</b>\n\n👤 Воркер: {worker}\n🌳 ТП: {tp}\n👑 Куратор: {curator}\n💵 Сумма: {amount} ₽\n💸 Доля воркера: {share} ₽\n\n❔ Сервис: {service}"
 def get():
+    from work import recover_profit_transaction
+    recover_profit_transaction()
     try:d=json.loads(PATH.read_text(encoding="utf8"))
-    except (OSError,ValueError):d={}
+    except FileNotFoundError:d={}
+    if not isinstance(d,dict):raise ValueError("Profit data must be an object")
     for key in (*LABEL,"channels","templates","history"):d.setdefault(key,[])
+    if any(not isinstance(d[key],list) for key in (*LABEL,"channels","templates","history")):
+        raise ValueError("Invalid profit collections; refusing to overwrite data")
     return d
 def save(d):
     PATH.parent.mkdir(parents=True,exist_ok=True)
@@ -18,12 +23,14 @@ def save(d):
     temp.write_text(json.dumps(d,ensure_ascii=False,indent=2),encoding="utf8")
     os.replace(temp,PATH)
 def keyboard(rows):return K([[B(name,callback_data=key)] for name,key in rows])
-def menu():return keyboard([(name,"pf_list_"+key) for key,name in LABEL.items()]+[("📣 Каналы","pf_channels"),("🧩 Шаблоны","pf_templates"),("🚀 Закинуть профит","pf_new"),("⬅️ Админка","pf_back")])
+def menu():return keyboard([(name,"pf_list_"+key) for key,name in LABEL.items()]+[("📣 Каналы","pf_channels"),("🧩 Шаблоны","pf_templates"),("🚀 Закинуть профит","pf_new"),("📚 Опубликованные профиты","pf_manage_all"),("⬅️ Админка","pf_back")])
 def listing(key):
     return keyboard([(f"🗑 {value}",f"pf_del_{key}_{i}") for i,value in enumerate(get()[key])]+[("➕ Добавить","pf_add_"+key),("⬅️ Назад","pf_home")])
 def channels():return keyboard([(f"🗑 {x['title']}",f"pf_cdel_{i}") for i,x in enumerate(get()["channels"])]+[("➕ Добавить","pf_cadd"),("⬅️ Назад","pf_home")])
 def templates():return keyboard([(x["name"],f"pf_template_{i}") for i,x in enumerate(get()["templates"])]+[("➕ Новый шаблон","pf_tadd"),("⬅️ Назад","pf_home")])
-def state(c,**values):c.user_data["profit_flow"]=values
+def state(c,**values):
+    c.user_data.pop("awaiting",None)
+    c.user_data["profit_flow"]=values
 def clear(c):c.user_data.pop("profit_flow",None)
 def render(template,values):
     text=template["body"]
@@ -67,6 +74,8 @@ def formatted_html(message):
 
 async def start(update,context):
     if update.effective_user.id not in context.bot_data["profit_admins"]:return
+    if update.effective_chat.type != "private":return
+    context.user_data.pop("awaiting",None)
     clear(context)
     await update.message.reply_text("📊 MTR STATS · Профиты",reply_markup=menu())
 async def next_field(message,context):
@@ -92,9 +101,17 @@ async def next_field(message,context):
         await message.reply_text("Выберите "+LABEL[field]+":",reply_markup=keyboard(rows))
 async def callback(update,context):
     q=update.callback_query
+    # Channel buttons are indicators, never an administration endpoint.
+    if q.data.startswith("pf_status_"):
+        await q.answer();return
     if q.from_user.id not in context.bot_data["profit_admins"]:
-        await q.answer("Доступ запрещён",show_alert=True);return
+        await q.answer();return
+    if q.message.chat.type != "private":
+        await q.answer();return
     await q.answer()
+    if q.data.startswith("pf_manage_"):
+        from profit_admin import callback as manage_callback
+        await manage_callback(q,context);return
     action=q.data;d=get();p=context.user_data.get("profit_flow",{})
     if action=="pf_home":
         clear(context);await q.edit_message_text("📊 MTR STATS · Профиты",reply_markup=menu())
@@ -180,6 +197,7 @@ async def callback(update,context):
         else:await q.edit_message_text("Отменено.",reply_markup=menu())
     elif action=="pf_publish":
         if p.get("mode")!="confirm":return
+        p["mode"]="publishing"
         try:
             template=d["templates"][p["template"]];channel=d["channels"][p["channel"]]
             # Copy the exact preview, preserving its photo, formatting and custom emoji entities.
@@ -187,30 +205,38 @@ async def callback(update,context):
             if q.message.message_id != p.get("preview_id") or q.message.chat_id != p.get("preview_chat"):
                 await q.message.reply_text("Предпросмотр устарел. Создайте профит заново.")
                 return
+            from profit_admin import status_keyboard
             sent=await context.bot.copy_message(
                 chat_id=channel["id"],
                 from_chat_id=p["preview_chat"],
                 message_id=p["preview_id"],
+                reply_markup=status_keyboard({"status":"waiting"}),
             )
-        except Exception as exc:
-            await q.message.reply_text(f"❌ Не удалось опубликовать: {exc}");return
+        except Exception:
+            await q.message.reply_text("⚠️ Результат публикации неизвестен. Проверьте канал перед новой отправкой, чтобы не создать дубликат.");return
         p["mode"]="sent"
         try:
-            from work import load_data,save_data
-            top=load_data();worker=p["values"]["worker"]
-            top[worker]=int(top.get(worker,0))+int(p["values"]["share"])
-            save_data(top)
-            d=get();d["history"].append({"channel":channel["id"],"message":sent.message_id,"values":p["values"]});save(d)
+            from work import load_data,commit_profit_data
+            from profit_admin import delta_top,worker_key
+            top=delta_top(load_data(),None,p["values"]);worker=worker_key(top,p["values"]["worker"])
+            d=get();d["history"].append({"channel":channel["id"],"message":sent.message_id,
+                "values":dict(p["values"]),"template":template["body"],
+                "photo":p["values"].get("_photo") or template.get("photo"),
+                "status":"waiting","revision":0,"buttons_version":1});commit_profit_data(d,top)
             clear(context)
             await q.edit_message_reply_markup(reply_markup=None)
             await q.message.reply_text(f"✅ Опубликовано! {worker}: {top[worker]:,} ₽",reply_markup=menu())
-        except Exception as exc:
-            await q.message.reply_text(f"⚠️ Пост опубликован, но возникла ошибка сохранения: {exc}. Не отправляйте его повторно.")
+        except Exception:
+            await q.message.reply_text("⚠️ Пост опубликован, но возникла ошибка сохранения. Не отправляйте его повторно; проверьте хранилище.")
 async def input_message(update,context):
     if update.effective_user.id not in context.bot_data["profit_admins"]:return
+    if update.effective_chat.type != "private":return
     p=context.user_data.get("profit_flow")
     if not p:return
     message=update.message;text=(message.text or "").strip();d=get();mode=p["mode"]
+    if mode.startswith("manage_"):
+        from profit_admin import input_message as manage_input
+        await manage_input(message,context);return
     if mode=="add":
         key=p["kind"]
         if not text or len(text)>100:await message.reply_text("Введите название до 100 символов.");return
@@ -229,7 +255,7 @@ async def input_message(update,context):
             member=await context.bot.get_chat_member(channel.id,context.bot.id)
             if channel.type!="channel" or member.status not in ("administrator","creator") or (member.status=="administrator" and not member.can_post_messages):
                 await message.reply_text("Бот должен иметь право публикации в канале.");return
-        except Exception as exc:await message.reply_text(f"Не удалось проверить канал: {exc}");return
+        except Exception:await message.reply_text("Не удалось проверить канал. Проверьте ID канала и права бота.");return
         if not any(x["id"]==channel.id for x in d["channels"]):
             d["channels"].append({"id":channel.id,"title":channel.title});save(d)
         clear(context);await message.reply_text("✅ Канал добавлен.",reply_markup=menu())
@@ -281,10 +307,13 @@ async def preview(message,context):
         p["preview_id"]=sent.message_id
         p["preview_chat"]=sent.chat_id
         p["mode"]="confirm"
-    except Exception as exc:await message.reply_text(f"Ошибка оформления: {exc}")
+    except ValueError as exc:await message.reply_text(f"Ошибка оформления: {exc}")
+    except Exception:await message.reply_text("Не удалось создать предпросмотр. Проверьте оформление и доступность фото.")
 
 def register(app,admin_ids):
     app.bot_data["profit_admins"]=admin_ids
     app.add_handler(CommandHandler("profits",start))
     app.add_handler(CallbackQueryHandler(callback,pattern=r"^pf_"))
     app.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND,input_message),group=-1)
+
+

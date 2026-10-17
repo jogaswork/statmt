@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+profits.json
+profits.tmp
+top_data.json*
+card_data.json*
+profit_transaction.json
+profit_transaction.tmp
+.snapshot_417799_restored
+

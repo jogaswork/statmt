@@ -1,4 +1,8 @@
 import json
+import sys
+# profits imports this module for accounting even when launched as `python work.py`.
+if __name__ == "__main__":
+    sys.modules["work"] = sys.modules[__name__]
 import logging
 from telegram.ext import MessageHandler, filters
 from telegram.request import HTTPXRequest
@@ -30,6 +34,8 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 # ---------------------------------------------------------------------------
 # Конфигурация
@@ -88,12 +94,16 @@ def _read_top_file(path: Path) -> dict:
             value = json.load(f)
         if isinstance(value, dict):
             return {str(k): int(v) for k, v in value.items()}
+        raise ValueError("Top data must be an object")
     except (OSError, ValueError, TypeError):
         logger.exception("Unable to read top file: %s", path)
+        if path.exists():
+            raise ValueError("Existing top data is unreadable; refusing to overwrite it")
     return {}
 
 
 def load_data() -> dict:
+    recover_profit_transaction()
     # Never overwrite existing volume data during migration.
     if DATA_FILE.exists():
         return _read_top_file(DATA_FILE)
@@ -103,7 +113,9 @@ def load_data() -> dict:
     return {}
 
 
-def save_data(data: dict) -> None:
+def save_data(data: dict, *, _recover=True) -> None:
+    if _recover:
+        recover_profit_transaction()
     DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
     # Keep a backup of existing data before any change.
     if DATA_FILE.exists():
@@ -120,6 +132,28 @@ def save_data(data: dict) -> None:
             os.unlink(temp)
 
 
+def recover_profit_transaction():
+    """Replay absolute snapshots, so a crash between file writes cannot accrue twice."""
+    journal = DATA_FILE.parent / "profit_transaction.json"
+    if not journal.exists():
+        return
+    transaction = json.loads(journal.read_text(encoding="utf8"))
+    from profits import save
+    save_data(transaction["top"], _recover=False)
+    save(transaction["profits"])
+    journal.unlink()
+
+
+def commit_profit_data(profits, top):
+    recover_profit_transaction()
+    journal = DATA_FILE.parent / "profit_transaction.json"
+    journal.parent.mkdir(parents=True, exist_ok=True)
+    temp = journal.with_suffix(".tmp")
+    temp.write_text(json.dumps({"profits": profits, "top": top}, ensure_ascii=False), encoding="utf8")
+    os.replace(temp, journal)
+    recover_profit_transaction()
+
+
 def restore_historical_snapshot_once() -> None:
     """Merge older screenshot standings, preserve new amounts, and never add twice."""
     if RESTORE_MARKER.exists():
@@ -128,6 +162,8 @@ def restore_historical_snapshot_once() -> None:
     existing = load_data()
     # Do not replace a populated modern top that already exceeds the historic snapshot.
     if sum(existing.values()) >= 417799:
+        RESTORE_MARKER.parent.mkdir(parents=True, exist_ok=True)
+        RESTORE_MARKER.write_text("Existing historical total preserved.\n", encoding="utf8")
         logger.info("Historical restore skipped: current total already >= 417799.")
         return
     merged = dict(existing)
@@ -314,6 +350,7 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     context.user_data.pop("awaiting", None)
+    context.user_data.pop("profit_flow", None)
     await update.message.reply_text("⚙️ Админ-панель", reply_markup=admin_main_keyboard())
 
 
@@ -327,6 +364,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     await query.answer()
     data = query.data
+    context.user_data.pop("profit_flow", None)
 
     if data == "admin_profits":
         context.user_data.pop("awaiting", None)
@@ -420,6 +458,8 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def admin_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Ловит текстовый ввод после нажатия кнопок в админ-панели."""
     user_id = update.effective_user.id
+    if context.user_data.get("profit_flow"):
+        return
     if user_id not in ADMIN_IDS:
         return
 
@@ -522,7 +562,8 @@ def main() -> None:
         pool_timeout=10.0,
     )
     restore_historical_snapshot_once()
-    application = Application.builder().token(BOT_TOKEN).request(request).build()
+    from profit_admin import sync_history
+    application = Application.builder().token(BOT_TOKEN).request(request).post_init(sync_history).build()
 
     from profits import register as register_profits
     register_profits(application, ADMIN_IDS)
@@ -559,3 +600,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
